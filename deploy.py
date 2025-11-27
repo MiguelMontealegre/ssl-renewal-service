@@ -79,7 +79,8 @@ def main():
     
     # 4. Build and Run from the Git Repo
     print("Building Docker image from git repo...")
-    execute_command(ssh, f"docker build -t ssl-service {REPO_DIR}", sudo=True)
+    # Added --no-cache to ensure config changes are picked up
+    execute_command(ssh, f"docker build --no-cache -t ssl-service {REPO_DIR}", sudo=True)
     
     print("Running container...")
     # Ensure certs directory exists outside (or inside repo if we want, but better outside to persist)
