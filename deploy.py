@@ -56,60 +56,41 @@ def main():
     ssh = create_ssh_client(HOSTNAME, 22, USERNAME, PASSWORD)
     sftp = ssh.open_sftp()
 
-    print(f"Creating remote directory {REMOTE_DIR}...")
-    try:
-        sftp.mkdir(REMOTE_DIR)
-    except IOError:
-        pass # Exists
-    
-    # Upload files
-    print("Uploading files...")
-    sftp.put("Dockerfile", f"{REMOTE_DIR}/Dockerfile")
-    sftp.put("requirements.txt", f"{REMOTE_DIR}/requirements.txt")
-    
-    # Recursively upload app directory
-    # First make sure app dir exists
-    try:
-        sftp.mkdir(f"{REMOTE_DIR}/app")
-    except:
-        pass
-    sftp_put_dir(sftp, "app", f"{REMOTE_DIR}/app")
-    
-    sftp.close()
-    
-    # Check docker
-    out, err, status = execute_command(ssh, "docker --version")
-    if status != 0:
-        print("Docker not found. Attempting to install...")
-        # Install docker (assuming ubuntu/debian)
-        cmds = [
-            "apt-get update",
-            "apt-get install -y docker.io",
-            "systemctl start docker",
-            "systemctl enable docker",
-            f"usermod -aG docker {USERNAME}"
-        ]
-        for cmd in cmds:
-            execute_command(ssh, cmd, sudo=True)
-            
-    # Build docker image
-    print("Building Docker image...")
-    # Use absolute path for build context instead of cd
-    execute_command(ssh, f"docker build -t ssl-service {REMOTE_DIR}", sudo=True)
-    
-    # Stop existing container if running
-    print("Stopping existing container...")
+    # 1. Stop and remove the old manual deployment container
+    print("Cleaning up old manual deployment...")
     execute_command(ssh, "docker stop ssl-service || true", sudo=True)
     execute_command(ssh, "docker rm ssl-service || true", sudo=True)
+    execute_command(ssh, "rm -rf /home/wgomez/last-ssl-renew", sudo=False) # Remove old manual dir
+
+    # 2. Setup/Update Git Repository
+    REPO_DIR = "/home/wgomez/ssl-renewal-service"
+    REPO_URL = "https://github.com/MiguelMontealegre/ssl-renewal-service.git"
     
-    # Run container
-    # We map /etc/letsencrypt to persist certs
-    # We use host networking or map port 80
+    print(f"Updating repository at {REPO_DIR}...")
+    # Check if repo exists
+    out, _, _ = execute_command(ssh, f"test -d {REPO_DIR} && echo exists || echo not_found")
+    if "exists" in out:
+        execute_command(ssh, f"cd {REPO_DIR} && git pull origin main")
+    else:
+        execute_command(ssh, f"git clone {REPO_URL} {REPO_DIR}")
+
+    # 3. Create .env file in the repo directory (optional, if needed for production secrets)
+    # Or rely on default config. Ideally secrets should be injected here or exist on server.
+    
+    # 4. Build and Run from the Git Repo
+    print("Building Docker image from git repo...")
+    execute_command(ssh, f"docker build -t ssl-service {REPO_DIR}", sudo=True)
+    
     print("Running container...")
+    # Ensure certs directory exists outside (or inside repo if we want, but better outside to persist)
+    # Let's keep certs in a persistent user directory
+    CERTS_HOST_DIR = "/home/wgomez/ssl-certs-data"
+    execute_command(ssh, f"mkdir -p {CERTS_HOST_DIR}")
+    
     run_cmd = (
         f"docker run -d --name ssl-service "
         f"-p 80:80 "
-        f"-v {REMOTE_DIR}/certs:/etc/letsencrypt "
+        f"-v {CERTS_HOST_DIR}:/etc/letsencrypt "
         f"--restart unless-stopped "
         f"ssl-service"
     )
