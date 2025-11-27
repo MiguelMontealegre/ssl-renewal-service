@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+apscheduler
+python-dotenv
+cryptography
+certbot
+requests
+pydantic-settings
+
